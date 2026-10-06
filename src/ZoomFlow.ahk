@@ -1,6 +1,6 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
-; ZoomFlow 1.7 — Windows / AutoHotkey v2
+; ZoomFlow 1.7.1 — Windows / AutoHotkey v2
 ; Quit earlier zoom scripts before launching this file.
 ; Default: Ctrl + MMB + move mouse to zoom. Ctrl + Alt + Z: settings.
 ; Ctrl + Alt + Esc: exit and release cursor.
@@ -161,19 +161,20 @@ BuildUI()
     }
     C["SpeedLabel"] := TextAt("",248,324,500,24,11,"262234",true)
     C["Speed"] := ControlAt("Slider","x248 y354 w500 h28 Range25-300 ToolTip NoTicks",Cfg["Speed"])
-    C["AccelerationLabel"] := TextAt("",248,398,500,24,11,"262234",true)
-    C["Acceleration"] := ControlAt("Slider","x248 y428 w500 h28 Range0-100 ToolTip NoTicks",Cfg["Acceleration"])
-    C["GainLabel"] := TextAt("",248,472,280,24,10,"82798E")
-    C["MaxGain"] := ControlAt("Slider","x548 y468 w200 h28 Range10-40 NoTicks",Cfg["MaxGain"])
-    TextAt("Интервал обработки · мс",248,505,280,24,10,"82798E")
-    C["Interval"] := ControlAt("DropDownList","x584 y500 w164",["10","15","20","30"])
+    C["AccelerationLabel"] := TextAt("",248,390,500,24,11,"262234",true)
+    C["Acceleration"] := ControlAt("Slider","x248 y418 w500 h28 Range0-100 ToolTip NoTicks",Cfg["Acceleration"])
+    C["GainLabel"] := TextAt("",248,450,280,24,10,"82798E")
+    C["MaxGain"] := ControlAt("Slider","x548 y448 w200 h28 Range10-40 NoTicks",Cfg["MaxGain"])
+    C["GainHint"] := TextAt("",248,480,500,36,9,"82798E")
+    TextAt("Интервал обновления зума · мс",248,520,320,24,10,"82798E")
+    C["Interval"] := ControlAt("DropDownList","x584 y516 w164",["10","15","20","30"])
     chosen := 1
     for i,n in [10,15,20,30] {
         if n = Cfg["Interval"]
             chosen := i
     }
     C["Interval"].Choose(chosen)
-    TextAt("Как часто обрабатывается движение мыши.`n10 мс — чаще; 30 мс — реже. Начни с 10 мс.",248,538,500,36,9,"82798E")
+    TextAt("Задержка между обновлениями зума.`n10 мс — обновления чаще; 30 мс — реже. Обычно оставь 10 мс.",248,548,500,30,9,"82798E")
 
     PageIndex := 2
     TextAt("Твой привычный жест",248,192,500,30,18,"262234",true)
@@ -443,7 +444,11 @@ DrawSlider(ctrl, lParam)
     header := A_PtrSize = 8 ? 24 : 12
     if NumGet(lParam,header,"UInt") != 1
         return 0
-    target := NumGet(lParam,A_PtrSize = 8 ? 32 : 16,"Ptr")
+    ; The notification DC is clipped to the native thumb damage rectangle.
+    ; Our larger custom thumb must update the whole client area.
+    target := DllCall("GetDC","Ptr",ctrl.Hwnd,"Ptr")
+    if !target
+        return 0
     bounds := Buffer(16,0)
     DllCall("GetClientRect","Ptr",ctrl.Hwnd,"Ptr",bounds)
     width := NumGet(bounds,8,"Int"), height := NumGet(bounds,12,"Int")
@@ -454,6 +459,7 @@ DrawSlider(ctrl, lParam)
             DllCall("DeleteDC","Ptr",hdc)
         if frame
             DllCall("DeleteObject","Ptr",frame)
+        DllCall("ReleaseDC","Ptr",ctrl.Hwnd,"Ptr",target)
         return 0
     }
     previous := DllCall("SelectObject","Ptr",hdc,"Ptr",frame,"Ptr")
@@ -478,6 +484,7 @@ DrawSlider(ctrl, lParam)
     DllCall("SelectObject","Ptr",hdc,"Ptr",previous)
     DllCall("DeleteObject","Ptr",frame)
     DllCall("DeleteDC","Ptr",hdc)
+    DllCall("ReleaseDC","Ptr",ctrl.Hwnd,"Ptr",target)
     return 4
 }
 
@@ -535,7 +542,11 @@ RefreshLabels(*)
     C["SpeedLabel"].Text := "Скорость зума: " Format("{:.2f}", C["Speed"].Value / 100) "×"
     C["AccelerationLabel"].Text := "Ускорение: " (C["Acceleration"].Value = 0
         ? "выключено" : Format("{:.2f}", C["Acceleration"].Value / 100))
-    C["GainLabel"].Text := "Предел ускорения: " Format("{:.1f}", C["MaxGain"].Value / 10) "×"
+    C["GainLabel"].Text := "Максимальный разгон: " Format("{:.1f}", C["MaxGain"].Value / 10) "×"
+    C["GainHint"].Text := C["Acceleration"].Value = 0
+        ? "Работает только при включённом ускорении.`nОграничивает разгон зума при быстром движении мыши."
+        : "При быстром движении зум ускорится максимум в "
+            . Format("{:.1f}", C["MaxGain"].Value / 10) . " раза.`nНапример, 2× — не более чем вдвое быстрее обычной скорости."
     C["MaxGain"].Enabled := C["Acceleration"].Value > 0
     for key in ["Speed","Acceleration","MaxGain","Smoothing","Inertia"]
         RepaintSlider(C[key])
