@@ -1,6 +1,6 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
-; ZoomFlow 1.8.2 — Windows / AutoHotkey v2
+; ZoomFlow 1.8.3 — Windows / AutoHotkey v2
 ; Quit earlier zoom scripts before launching this file.
 ; Default: Ctrl + MMB + move mouse to zoom. Ctrl + Alt + Z: settings.
 ; Ctrl + Alt + Esc: exit and release cursor.
@@ -151,7 +151,7 @@ BuildUI()
         C["Nav" i] := ButtonAt(name, 20, 130 + (i-1)*56, 160, 44, "nav" i)
         C["Nav" i].OnEvent("Click", SwitchPage.Bind(i))
     }
-    C["PauseCard"] := SettingsUI.AddText("x20 y535 w160 h153 +0x400000D", "")
+    C["PauseCard"] := SettingsUI.AddText("x20 y535 w160 h153 +0xD", "")
     C["State"] := SettingsUI.AddText("x36 y553 w132 h26 +0xD", "")
     C["State"].SetFont("s11 Bold", "Segoe UI")
     C["PauseDescription"] := BufferedLabel("x36 y592 w132 h38", "Управляй масштабом`nдвижением мыши.", "F4F0FF", "7B708E")
@@ -335,7 +335,7 @@ SwitchPage(index,*)
     Loop 4
         DllCall("InvalidateRect","Ptr",C["Nav" A_Index].Hwnd,"Ptr",0,"Int",true)
     titles := ["Зум", "Управление", "Плавность", "Программа"]
-    SettingsUI.Title := "ZoomFlow 1.8.2 — " . titles[index]
+    SettingsUI.Title := "ZoomFlow 1.8.3 — " . titles[index]
     DllCall("RedrawWindow","Ptr",SettingsUI.Hwnd,"Ptr",0,"Ptr",0,"UInt",0x185)
 }
 
