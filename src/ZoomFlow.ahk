@@ -1,6 +1,6 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
-; ZoomFlow 1.7.1 — Windows / AutoHotkey v2
+; ZoomFlow 1.7.2 — Windows / AutoHotkey v2
 ; Quit earlier zoom scripts before launching this file.
 ; Default: Ctrl + MMB + move mouse to zoom. Ctrl + Alt + Z: settings.
 ; Ctrl + Alt + Esc: exit and release cursor.
@@ -264,11 +264,7 @@ ControlAt(type, options, value)
 {
     global SettingsUI, Pages, PageIndex
     ctrl := SettingsUI.Add(type, options, value)
-    if type = "Slider" {
-        DllCall("UxTheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", "", "Str", "")
-        ctrl.OnNotify(-12, DrawSlider)
-        ctrl.OnEvent("Change", RepaintSlider)
-    }
+    ; Sliders use native Windows painting, including focus and DPI scaling.
     if type = "Edit" || type = "DropDownList"
         RoundField(ctrl)
     if PageIndex
@@ -432,68 +428,6 @@ ColorRef(hex)
     return ((n & 255) << 16) | (n & 0xFF00) | ((n >> 16) & 255)
 }
 
-RepaintSlider(ctrl,*)
-{
-    ; Native trackbars invalidate only the native thumb rectangle, which is
-    ; smaller than our round custom thumb. Repaint the complete control.
-    DllCall("RedrawWindow","Ptr",ctrl.Hwnd,"Ptr",0,"Ptr",0,"UInt",0x101)
-}
-
-DrawSlider(ctrl, lParam)
-{
-    header := A_PtrSize = 8 ? 24 : 12
-    if NumGet(lParam,header,"UInt") != 1
-        return 0
-    ; The notification DC is clipped to the native thumb damage rectangle.
-    ; Our larger custom thumb must update the whole client area.
-    target := DllCall("GetDC","Ptr",ctrl.Hwnd,"Ptr")
-    if !target
-        return 0
-    bounds := Buffer(16,0)
-    DllCall("GetClientRect","Ptr",ctrl.Hwnd,"Ptr",bounds)
-    width := NumGet(bounds,8,"Int"), height := NumGet(bounds,12,"Int")
-    hdc := DllCall("CreateCompatibleDC","Ptr",target,"Ptr")
-    frame := DllCall("CreateCompatibleBitmap","Ptr",target,"Int",width,"Int",height,"Ptr")
-    if !hdc || !frame {
-        if hdc
-            DllCall("DeleteDC","Ptr",hdc)
-        if frame
-            DllCall("DeleteObject","Ptr",frame)
-        DllCall("ReleaseDC","Ptr",ctrl.Hwnd,"Ptr",target)
-        return 0
-    }
-    previous := DllCall("SelectObject","Ptr",hdc,"Ptr",frame,"Ptr")
-    brush := DllCall("CreateSolidBrush","UInt",0xFFFFFF,"Ptr")
-    DllCall("FillRect","Ptr",hdc,"Ptr",bounds,"Ptr",brush)
-    DllCall("DeleteObject","Ptr",brush)
-    if DllCall("GetFocus","Ptr") = ctrl.Hwnd
-        SmoothRound(hdc,1,1,NumGet(bounds,8,"Int")-2,NumGet(bounds,12,"Int")-2,8,"FFFFFF","B5A1E6")
-    channel := Buffer(16,0), thumb := Buffer(16,0)
-    SendMessage(0x41A,0,channel.Ptr,ctrl.Hwnd)
-    SendMessage(0x419,0,thumb.Ptr,ctrl.Hwnd)
-    x1 := NumGet(channel,0,"Int"), x2 := NumGet(channel,8,"Int")
-    tx := (NumGet(thumb,0,"Int")+NumGet(thumb,8,"Int"))/2
-    cy := (NumGet(thumb,4,"Int")+NumGet(thumb,12,"Int"))/2
-    scale := A_ScreenDPI/96
-    PaintRound(hdc,x1,cy-2*scale,x2,cy+2*scale,"EDE8F7",4*scale)
-    if ctrl.Enabled
-        PaintRound(hdc,x1,cy-2*scale,tx,cy+2*scale,"805AFF",4*scale)
-    PaintRound(hdc,tx-7*scale,cy-7*scale,tx+7*scale,cy+7*scale,ctrl.Enabled ? "805AFF" : "C9C3D5",14*scale)
-    DllCall("BitBlt","Ptr",target,"Int",0,"Int",0,"Int",width,"Int",height,
-        "Ptr",hdc,"Int",0,"Int",0,"UInt",0xCC0020)
-    DllCall("SelectObject","Ptr",hdc,"Ptr",previous)
-    DllCall("DeleteObject","Ptr",frame)
-    DllCall("DeleteDC","Ptr",hdc)
-    DllCall("ReleaseDC","Ptr",ctrl.Hwnd,"Ptr",target)
-    return 4
-}
-
-PaintRound(hdc,x1,y1,x2,y2,color,radius)
-{
-    if x2 > x1 && y2 > y1
-        SmoothRound(hdc,x1,y1,x2-x1,y2-y1,radius/2,color)
-}
-
 SmoothRound(hdc,x,y,w,h,r,color,stroke:="")
 {
     static module := DllCall("LoadLibraryW", "Str", "gdiplus.dll", "Ptr")
@@ -548,8 +482,6 @@ RefreshLabels(*)
         : "При быстром движении зум ускорится максимум в "
             . Format("{:.1f}", C["MaxGain"].Value / 10) . " раза.`nНапример, 2× — не более чем вдвое быстрее обычной скорости."
     C["MaxGain"].Enabled := C["Acceleration"].Value > 0
-    for key in ["Speed","Acceleration","MaxGain","Smoothing","Inertia"]
-        RepaintSlider(C[key])
 }
 
 SaveSettings(*)
