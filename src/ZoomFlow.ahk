@@ -1,6 +1,6 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
-; ZoomFlow 1.8 — Windows / AutoHotkey v2
+; ZoomFlow 1.8.1 — Windows / AutoHotkey v2
 ; Quit earlier zoom scripts before launching this file.
 ; Default: Ctrl + MMB + move mouse to zoom. Ctrl + Alt + Z: settings.
 ; Ctrl + Alt + Esc: exit and release cursor.
@@ -60,6 +60,7 @@ PageIndex := 0
 CurrentPage := 1
 ButtonKinds := Map()
 TextLayouts := Map()
+BufferedText := Map()
 ZoomSliders := Map()
 DraggingSlider := 0
 OnMessage 0x0201, SliderMouseDown
@@ -296,9 +297,15 @@ RoundField(ctrl, cornerDiameter:=12)
 
 TextAt(text,x,y,w,h,size:=10,color:="262234",bold:=false)
 {
-    ctrl := ControlAt("Text", "x" x " y" y " w" w " h" h " BackgroundTrans", text)
+    global TextLayouts, Pages, PageIndex
+    options := "x" x " y" y " w" w " h" h
+    if x >= 220 && y >= 172 {
+        ctrl := BufferedLabel(options, text, y >= 600 ? "F7F6FA" : "FFFFFF", color)
+        if PageIndex
+            Pages[PageIndex].Push(ctrl)
+    } else
+        ctrl := ControlAt("Text", options " BackgroundTrans", text)
     ctrl.SetFont("s" size " c" color (bold ? " Bold" : " Norm"),"Segoe UI")
-    global TextLayouts
     TextLayouts[ctrl.Hwnd] := {Control:ctrl, BaseSize:size, CurrentSize:size, Cache:""}
     FitLabel(TextLayouts[ctrl.Hwnd])
     return ctrl
@@ -328,16 +335,18 @@ SwitchPage(index,*)
     Loop 4
         DllCall("InvalidateRect","Ptr",C["Nav" A_Index].Hwnd,"Ptr",0,"Int",true)
     titles := ["Зум", "Управление", "Плавность", "Программа"]
-    SettingsUI.Title := "ZoomFlow 1.8 — " . titles[index]
+    SettingsUI.Title := "ZoomFlow 1.8.1 — " . titles[index]
     DllCall("RedrawWindow","Ptr",SettingsUI.Hwnd,"Ptr",0,"Ptr",0,"UInt",0x185)
 }
 
 DrawButton(wParam,lParam,*)
 {
-    global ButtonKinds, CurrentPage, Enabled, C, TestBitmap, TestPercentValue, PauseInk, ZoomSliders
+    global ButtonKinds, CurrentPage, Enabled, C, TestBitmap, TestPercentValue, PauseInk, ZoomSliders, BufferedText
     ; DRAWITEMSTRUCT layout differs between 32-bit and 64-bit Windows.
     hwndOffset := A_PtrSize = 8 ? 24 : 20
     hwnd := NumGet(lParam,hwndOffset,"Ptr")
+    if BufferedText.Has(hwnd)
+        return DrawBufferedLabel(BufferedText[hwnd], lParam, hwndOffset)
     if ZoomSliders.Has(hwnd)
         return DrawZoomSlider(ZoomSliders[hwnd], lParam, hwndOffset)
     if C.Has("BrandIcon") && hwnd = C["BrandIcon"].Hwnd {
@@ -3215,4 +3224,92 @@ ZoomIconFile()
     file.RawWrite(bytes,size)
     file.Close()
     return target
+}
+
+
+; Text and its solid background are painted together, without WM_SETTEXT
+; invalidating the parent picture. Unchanged values do not request repaint.
+class BufferedLabel
+{
+    __New(options, caption, background, color)
+    {
+        global SettingsUI, BufferedText
+        this.Caption := caption
+        this.Background := background
+        this.Color := color
+        this.Control := SettingsUI.AddText(options " +0xD Background" background, "")
+        BufferedText[this.Hwnd] := this
+    }
+    Hwnd {
+        get => this.Control.Hwnd
+    }
+    Text {
+        get => this.Caption
+        set {
+            if value = this.Caption
+                return
+            this.Caption := value
+            global TextLayouts
+            if TextLayouts.Has(this.Hwnd)
+                FitLabel(TextLayouts[this.Hwnd])
+            this.Redraw()
+        }
+    }
+    Visible {
+        get => this.Control.Visible
+        set => this.Control.Visible := value
+    }
+    SetFont(options, fontName:="")
+    {
+        if RegExMatch(options, "i)(?:^|\s)c([0-9a-f]{6})(?=\s|$)", &match)
+            this.Color := match[1]
+        fontOptions := Trim(RegExReplace(options, "i)(?:^|\s)c[0-9a-f]{6}(?=\s|$)", ""))
+        if fontOptions != "" || fontName != ""
+            this.Control.SetFont(fontOptions, fontName)
+        this.Redraw()
+    }
+    Redraw()
+    {
+        DllCall("InvalidateRect","Ptr",this.Hwnd,"Ptr",0,"Int",false)
+    }
+}
+
+DrawBufferedLabel(label, item, offset)
+{
+    target := NumGet(item,offset+A_PtrSize,"Ptr")
+    rectOffset := offset+2*A_PtrSize
+    width := NumGet(item,rectOffset+8,"Int")-NumGet(item,rectOffset,"Int")
+    height := NumGet(item,rectOffset+12,"Int")-NumGet(item,rectOffset+4,"Int")
+    if width < 1 || height < 1
+        return true
+    dc := DllCall("CreateCompatibleDC","Ptr",target,"Ptr")
+    bitmap := DllCall("CreateCompatibleBitmap","Ptr",target,"Int",width,"Int",height,"Ptr")
+    if !dc || !bitmap {
+        if dc
+            DllCall("DeleteDC","Ptr",dc)
+        if bitmap
+            DllCall("DeleteObject","Ptr",bitmap)
+        return false
+    }
+    oldBitmap := DllCall("SelectObject","Ptr",dc,"Ptr",bitmap,"Ptr")
+    font := SendMessage(0x31,0,0,label.Hwnd)
+    oldFont := DllCall("SelectObject","Ptr",dc,"Ptr",font,"Ptr")
+    try {
+        bounds := Buffer(16,0)
+        NumPut("Int",width,"Int",height,bounds,8)
+        brush := DllCall("CreateSolidBrush","UInt",ColorRef(label.Background),"Ptr")
+        DllCall("FillRect","Ptr",dc,"Ptr",bounds,"Ptr",brush)
+        DllCall("DeleteObject","Ptr",brush)
+        DllCall("SetBkMode","Ptr",dc,"Int",1)
+        DllCall("SetTextColor","Ptr",dc,"UInt",ColorRef(label.Color))
+        DllCall("DrawTextW","Ptr",dc,"Str",label.Caption,"Int",-1,"Ptr",bounds,"UInt",0x810)
+        DllCall("BitBlt","Ptr",target,"Int",0,"Int",0,"Int",width,"Int",height,
+            "Ptr",dc,"Int",0,"Int",0,"UInt",0xCC0020)
+    } finally {
+        DllCall("SelectObject","Ptr",dc,"Ptr",oldFont)
+        DllCall("SelectObject","Ptr",dc,"Ptr",oldBitmap)
+        DllCall("DeleteObject","Ptr",bitmap)
+        DllCall("DeleteDC","Ptr",dc)
+    }
+    return true
 }
