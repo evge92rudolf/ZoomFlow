@@ -266,6 +266,7 @@ ControlAt(type, options, value)
     if type = "Slider" {
         DllCall("UxTheme\SetWindowTheme", "Ptr", ctrl.Hwnd, "Str", "", "Str", "")
         ctrl.OnNotify(-12, DrawSlider)
+        ctrl.OnEvent("Change", RepaintSlider)
     }
     if type = "Edit" || type = "DropDownList"
         RoundField(ctrl)
@@ -430,14 +431,32 @@ ColorRef(hex)
     return ((n & 255) << 16) | (n & 0xFF00) | ((n >> 16) & 255)
 }
 
+RepaintSlider(ctrl,*)
+{
+    ; Native trackbars invalidate only the native thumb rectangle, which is
+    ; smaller than our round custom thumb. Repaint the complete control.
+    DllCall("RedrawWindow","Ptr",ctrl.Hwnd,"Ptr",0,"Ptr",0,"UInt",0x101)
+}
+
 DrawSlider(ctrl, lParam)
 {
     header := A_PtrSize = 8 ? 24 : 12
     if NumGet(lParam,header,"UInt") != 1
         return 0
-    hdc := NumGet(lParam,A_PtrSize = 8 ? 32 : 16,"Ptr")
+    target := NumGet(lParam,A_PtrSize = 8 ? 32 : 16,"Ptr")
     bounds := Buffer(16,0)
     DllCall("GetClientRect","Ptr",ctrl.Hwnd,"Ptr",bounds)
+    width := NumGet(bounds,8,"Int"), height := NumGet(bounds,12,"Int")
+    hdc := DllCall("CreateCompatibleDC","Ptr",target,"Ptr")
+    frame := DllCall("CreateCompatibleBitmap","Ptr",target,"Int",width,"Int",height,"Ptr")
+    if !hdc || !frame {
+        if hdc
+            DllCall("DeleteDC","Ptr",hdc)
+        if frame
+            DllCall("DeleteObject","Ptr",frame)
+        return 0
+    }
+    previous := DllCall("SelectObject","Ptr",hdc,"Ptr",frame,"Ptr")
     brush := DllCall("CreateSolidBrush","UInt",0xFFFFFF,"Ptr")
     DllCall("FillRect","Ptr",hdc,"Ptr",bounds,"Ptr",brush)
     DllCall("DeleteObject","Ptr",brush)
@@ -454,6 +473,11 @@ DrawSlider(ctrl, lParam)
     if ctrl.Enabled
         PaintRound(hdc,x1,cy-2*scale,tx,cy+2*scale,"805AFF",4*scale)
     PaintRound(hdc,tx-7*scale,cy-7*scale,tx+7*scale,cy+7*scale,ctrl.Enabled ? "805AFF" : "C9C3D5",14*scale)
+    DllCall("BitBlt","Ptr",target,"Int",0,"Int",0,"Int",width,"Int",height,
+        "Ptr",hdc,"Int",0,"Int",0,"UInt",0xCC0020)
+    DllCall("SelectObject","Ptr",hdc,"Ptr",previous)
+    DllCall("DeleteObject","Ptr",frame)
+    DllCall("DeleteDC","Ptr",hdc)
     return 4
 }
 
@@ -513,6 +537,8 @@ RefreshLabels(*)
         ? "выключено" : Format("{:.2f}", C["Acceleration"].Value / 100))
     C["GainLabel"].Text := "Предел ускорения: " Format("{:.1f}", C["MaxGain"].Value / 10) "×"
     C["MaxGain"].Enabled := C["Acceleration"].Value > 0
+    for key in ["Speed","Acceleration","MaxGain","Smoothing","Inertia"]
+        RepaintSlider(C[key])
 }
 
 SaveSettings(*)
