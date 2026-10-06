@@ -178,7 +178,7 @@ BuildUI()
     C["MaxGain"] := ControlAt("Slider","x548 y440 w200 h28 Range10-40 NoTicks",Cfg["MaxGain"])
     C["GainHint"] := TextAt("",248,473,500,32,9,"82798E")
     TextAt("Интервал обновления зума · мс",248,504,412,22,10,"82798E")
-    C["Interval"] := ControlAt("DropDownList","x680 y506 w68",["10","15","20","30"])
+    C["Interval"] := ControlAt("DropDownList","x680 y538 w68",["10","15","20","30"])
     chosen := 1
     for i,n in [10,15,20,30] {
         if n = Cfg["Interval"]
