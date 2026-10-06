@@ -1,6 +1,6 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
-; ZoomFlow 1.5.6 — Windows / AutoHotkey v2
+; ZoomFlow 1.7 — Windows / AutoHotkey v2
 ; Quit earlier zoom scripts before launching this file.
 ; Default: Ctrl + MMB + move mouse to zoom. Ctrl + Alt + Z: settings.
 ; Ctrl + Alt + Esc: exit and release cursor.
@@ -59,9 +59,10 @@ Pages := Map(1, [], 2, [], 3, [], 4, [])
 PageIndex := 0
 CurrentPage := 1
 ButtonKinds := Map()
+TextLayouts := Map()
 OnMessage 0x002B, DrawButton
 
-SettingsUI := Gui(, "ZoomFlow — настройки")
+SettingsUI := Gui("+DPIScale", "ZoomFlow — настройки")
 BuildUI()
 try {
     ValidateGesture(Cfg)
@@ -164,14 +165,15 @@ BuildUI()
     C["Acceleration"] := ControlAt("Slider","x248 y428 w500 h28 Range0-100 ToolTip NoTicks",Cfg["Acceleration"])
     C["GainLabel"] := TextAt("",248,472,280,24,10,"82798E")
     C["MaxGain"] := ControlAt("Slider","x548 y468 w200 h28 Range10-40 NoTicks",Cfg["MaxGain"])
-    TextAt("Интервал обработки",248,527,280,24,10,"82798E")
-    C["Interval"] := ControlAt("DropDownList","x584 y520 w164",["10","15","20","30"])
+    TextAt("Интервал обработки · мс",248,505,280,24,10,"82798E")
+    C["Interval"] := ControlAt("DropDownList","x584 y500 w164",["10","15","20","30"])
     chosen := 1
     for i,n in [10,15,20,30] {
         if n = Cfg["Interval"]
             chosen := i
     }
     C["Interval"].Choose(chosen)
+    TextAt("Как часто обрабатывается движение мыши.`n10 мс — чаще; 30 мс — реже. Начни с 10 мс.",248,538,500,36,9,"82798E")
 
     PageIndex := 2
     TextAt("Твой привычный жест",248,192,500,30,18,"262234",true)
@@ -239,7 +241,7 @@ BuildUI()
     ButtonAt("Сбросить масштаб",800,600,296,44).OnEvent("Click",ResetTest)
     TextAt("Отклик в других приложениях`nможет отличаться от этого теста.",804,658,288,36,9,"82798E")
     TextAt("Попробуй в движении",804,28,292,30,17,"262234",true)
-    TextAt("Наведи мышь на холст справа.`nУдерживай настроенное сочетание.`nСкорость и плавность можно менять`nбез сохранения. Новые клавиши`nсначала примени кнопкой слева.",804,68,288,80,9,"82798E")
+    TextAt("Наведи мышь на холст и зажми сочетание.`nСкорость и плавность меняются сразу.`nНовые клавиши примени кнопкой слева.",804,68,288,92,9,"82798E")
     ButtonAt("Применить и сохранить",220,600,252,44,"primary").OnEvent("Click",SaveSettings)
     ButtonAt("Скрыть",484,600,136,44).OnEvent("Click",HideSettings)
     ButtonAt("Помощь",632,600,144,44).OnEvent("Click",ShowHelp)
@@ -254,6 +256,7 @@ BuildUI()
     UpdateTestHint()
     RenderTest()
     SetTimer UpdateTestHint, 120
+    SetTimer FitInterfaceText, 250
 }
 
 ControlAt(type, options, value)
@@ -288,6 +291,9 @@ TextAt(text,x,y,w,h,size:=10,color:="262234",bold:=false)
 {
     ctrl := ControlAt("Text", "x" x " y" y " w" w " h" h " BackgroundTrans", text)
     ctrl.SetFont("s" size " c" color (bold ? " Bold" : " Norm"),"Segoe UI")
+    global TextLayouts
+    TextLayouts[ctrl.Hwnd] := {Control:ctrl, BaseSize:size, CurrentSize:size, Cache:""}
+    FitLabel(TextLayouts[ctrl.Hwnd])
     return ctrl
 }
 
@@ -664,6 +670,7 @@ ShowSettings(*)
     global SettingsUI
     StopZoom()
     SettingsUI.Show("w1120 h700")
+    FitInterfaceText()
     RenderTest()
 }
 
@@ -933,6 +940,7 @@ Cleanup(*)
 {
     SetTimer PulsePause, 0
     SetTimer UpdateTestHint, 0
+    SetTimer FitInterfaceText, 0
     StopZoom()
     global TestBitmap
     if TestBitmap
@@ -1872,4 +1880,61 @@ MaskCanvasCorners(dc,w,h,r)
     DllCall("Gdiplus\GdipDeleteBrush","Ptr",brush)
     DllCall("Gdiplus\GdipDeletePath","Ptr",path)
     DllCall("Gdiplus\GdipDeleteGraphics","Ptr",graphics)
+}
+
+; Native DPI scaling handles coordinates. Measure text using the actual Windows
+; font and physical client area to account for font substitution and rounding.
+FitInterfaceText(*)
+{
+    global SettingsUI, TextLayouts
+    if !DllCall("IsWindowVisible", "Ptr", SettingsUI.Hwnd)
+        return
+    for hwnd, item in TextLayouts
+        FitLabel(item)
+}
+
+FitLabel(item)
+{
+    ctrl := item.Control
+    text := ctrl.Text
+    rect := Buffer(16,0)
+    DllCall("GetClientRect","Ptr",ctrl.Hwnd,"Ptr",rect)
+    width := NumGet(rect,8,"Int"), height := NumGet(rect,12,"Int")
+    if width <= 0 || height <= 0
+        return
+    signature := text "|" width "|" height
+    if item.Cache = signature
+        return
+    item.Cache := signature
+    if item.CurrentSize != item.BaseSize {
+        ctrl.SetFont("s" item.BaseSize)
+        item.CurrentSize := item.BaseSize
+    }
+    if text = ""
+        return
+    dc := DllCall("GetDC","Ptr",ctrl.Hwnd,"Ptr")
+    if !dc
+        return
+    try {
+        Loop 12 {
+            font := SendMessage(0x31,0,0,ctrl.Hwnd)
+            previous := DllCall("SelectObject","Ptr",dc,"Ptr",font,"Ptr")
+            bounds := Buffer(16,0)
+            padding := Max(2,Round(A_ScreenDPI/96))
+            NumPut("Int",Max(1,width-padding),"Int",height,bounds,8)
+            DllCall("DrawTextW","Ptr",dc,"Str",text,"Int",-1,"Ptr",bounds,"UInt",0xC10)
+            DllCall("SelectObject","Ptr",dc,"Ptr",previous)
+            neededHeight := NumGet(bounds,12,"Int")
+            neededWidth := NumGet(bounds,8,"Int")
+            if neededHeight <= height-padding && neededWidth <= width-padding
+                break
+            nextSize := Max(7,item.CurrentSize-0.5)
+            if nextSize = item.CurrentSize
+                break
+            ctrl.SetFont("s" nextSize)
+            item.CurrentSize := nextSize
+        }
+    } finally {
+        DllCall("ReleaseDC","Ptr",ctrl.Hwnd,"Ptr",dc)
+    }
 }
