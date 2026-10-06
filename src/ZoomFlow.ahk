@@ -1,6 +1,6 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
-; ZoomFlow 1.8.1 — Windows / AutoHotkey v2
+; ZoomFlow 1.8.2 — Windows / AutoHotkey v2
 ; Quit earlier zoom scripts before launching this file.
 ; Default: Ctrl + MMB + move mouse to zoom. Ctrl + Alt + Z: settings.
 ; Ctrl + Alt + Esc: exit and release cursor.
@@ -151,11 +151,11 @@ BuildUI()
         C["Nav" i] := ButtonAt(name, 20, 130 + (i-1)*56, 160, 44, "nav" i)
         C["Nav" i].OnEvent("Click", SwitchPage.Bind(i))
     }
-    C["PauseCard"] := SettingsUI.AddPicture("x20 y535 w160 h153", PauseCardFile())
-    C["PauseCard"].Visible := false
+    C["PauseCard"] := SettingsUI.AddText("x20 y535 w160 h153 +0x400000D", "")
     C["State"] := SettingsUI.AddText("x36 y553 w132 h26 +0xD", "")
     C["State"].SetFont("s11 Bold", "Segoe UI")
-    TextAt("Управляй масштабом`nдвижением мыши.", 36, 592, 132, 38, 9, "7B708E")
+    C["PauseDescription"] := BufferedLabel("x36 y592 w132 h38", "Управляй масштабом`nдвижением мыши.", "F4F0FF", "7B708E")
+    C["PauseDescription"].SetFont("s9", "Segoe UI")
     C["Pause"] := ButtonAt("Пауза", 32, 634, 136, 40, "status")
     C["Pause"].OnEvent("Click", ToggleEnabled)
     TextAt("Масштаб под твоим", 248, 34, 430, 38, 22, "FFFFFF", false)
@@ -177,15 +177,15 @@ BuildUI()
     C["GainLabel"] := TextAt("",248,444,280,24,10,"82798E")
     C["MaxGain"] := ControlAt("Slider","x548 y440 w200 h28 Range10-40 NoTicks",Cfg["MaxGain"])
     C["GainHint"] := TextAt("",248,473,500,32,9,"82798E")
-    TextAt("Интервал обновления зума · мс",248,510,320,24,10,"82798E")
-    C["Interval"] := ControlAt("DropDownList","x584 y506 w164",["10","15","20","30"])
+    TextAt("Интервал обновления зума · мс",248,504,412,22,10,"82798E")
+    C["Interval"] := ControlAt("DropDownList","x680 y506 w68",["10","15","20","30"])
     chosen := 1
     for i,n in [10,15,20,30] {
         if n = Cfg["Interval"]
             chosen := i
     }
     C["Interval"].Choose(chosen)
-    TextAt("Как часто меняется масштаб при движении мыши.`n10 мс — чаще; 30 мс — реже. Обычно оставь 10 мс.",248,539,500,25,9,"82798E")
+    TextAt("Как часто обновляется зум при движении мыши.`n10 мс — чаще; 30 мс — реже. Обычно выбирай 10 мс.",248,532,412,36,9,"82798E")
 
     PageIndex := 2
     TextAt("Твой привычный жест",248,192,500,30,18,"262234",true)
@@ -335,7 +335,7 @@ SwitchPage(index,*)
     Loop 4
         DllCall("InvalidateRect","Ptr",C["Nav" A_Index].Hwnd,"Ptr",0,"Int",true)
     titles := ["Зум", "Управление", "Плавность", "Программа"]
-    SettingsUI.Title := "ZoomFlow 1.8.1 — " . titles[index]
+    SettingsUI.Title := "ZoomFlow 1.8.2 — " . titles[index]
     DllCall("RedrawWindow","Ptr",SettingsUI.Hwnd,"Ptr",0,"Ptr",0,"UInt",0x185)
 }
 
@@ -345,6 +345,8 @@ DrawButton(wParam,lParam,*)
     ; DRAWITEMSTRUCT layout differs between 32-bit and 64-bit Windows.
     hwndOffset := A_PtrSize = 8 ? 24 : 20
     hwnd := NumGet(lParam,hwndOffset,"Ptr")
+    if C.Has("PauseCard") && hwnd = C["PauseCard"].Hwnd
+        return DrawPausePanel(lParam, hwndOffset)
     if BufferedText.Has(hwnd)
         return DrawBufferedLabel(BufferedText[hwnd], lParam, hwndOffset)
     if ZoomSliders.Has(hwnd)
@@ -682,14 +684,17 @@ ToggleEnabled(*)
     StopZoom()
     Enabled := !Enabled
     C["Pause"].Text := Enabled ? "Пауза" : "Продолжить"
-    C["PauseCard"].Visible := !Enabled
+    C["PauseDescription"].Background := Enabled ? "F4F0FF" : "FFF4DB"
+    C["PauseDescription"].Redraw()
     SetTimer PulsePause, 0
     PauseInk := "7E420D"
     if !Enabled {
         PausePulseStart := A_TickCount
         SetTimer PulsePause, 33
     }
-    DllCall("RedrawWindow", "Ptr", SettingsUI.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x185)
+    for key in ["PauseCard", "State", "Pause"]
+        DllCall("InvalidateRect", "Ptr", C[key].Hwnd, "Ptr", 0, "Int", false)
+    UpdateTestHint()
     A_IconTip := Enabled ? "ZoomFlow — включён" : "ZoomFlow — пауза"
 }
 
@@ -3309,6 +3314,43 @@ DrawBufferedLabel(label, item, offset)
         DllCall("SelectObject","Ptr",dc,"Ptr",oldFont)
         DllCall("SelectObject","Ptr",dc,"Ptr",oldBitmap)
         DllCall("DeleteObject","Ptr",bitmap)
+        DllCall("DeleteDC","Ptr",dc)
+    }
+    return true
+}
+
+
+DrawPausePanel(item,offset)
+{
+    global Enabled
+    target := NumGet(item,offset+A_PtrSize,"Ptr")
+    rectOffset := offset+2*A_PtrSize
+    width := NumGet(item,rectOffset+8,"Int")-NumGet(item,rectOffset,"Int")
+    height := NumGet(item,rectOffset+12,"Int")-NumGet(item,rectOffset+4,"Int")
+    if width < 1 || height < 1
+        return true
+    dc := DllCall("CreateCompatibleDC","Ptr",target,"Ptr")
+    frame := DllCall("CreateCompatibleBitmap","Ptr",target,"Int",width,"Int",height,"Ptr")
+    if !dc || !frame {
+        if dc
+            DllCall("DeleteDC","Ptr",dc)
+        if frame
+            DllCall("DeleteObject","Ptr",frame)
+        return false
+    }
+    old := DllCall("SelectObject","Ptr",dc,"Ptr",frame,"Ptr")
+    try {
+        bounds := Buffer(16,0)
+        NumPut("Int",width,"Int",height,bounds,8)
+        brush := DllCall("CreateSolidBrush","UInt",0xFFFFFF,"Ptr")
+        DllCall("FillRect","Ptr",dc,"Ptr",bounds,"Ptr",brush)
+        DllCall("DeleteObject","Ptr",brush)
+        SmoothRound(dc,0,0,width,height,20*A_ScreenDPI/96,Enabled ? "F4F0FF" : "FFF4DB")
+        DllCall("BitBlt","Ptr",target,"Int",0,"Int",0,"Int",width,"Int",height,
+            "Ptr",dc,"Int",0,"Int",0,"UInt",0xCC0020)
+    } finally {
+        DllCall("SelectObject","Ptr",dc,"Ptr",old)
+        DllCall("DeleteObject","Ptr",frame)
         DllCall("DeleteDC","Ptr",dc)
     }
     return true
